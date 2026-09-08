@@ -15,6 +15,7 @@ from fling_manager.core.detectors import GameDetectorManager
 from fling_manager.core.prefix_manager import PrefixManager, SudoHelper
 from fling_manager.core.launcher_builder import LauncherBuilder, create_default_templates
 from fling_manager.core.detectors import SteamDetector, LutrisDetector, HeroicDetector, LegendaryDetector, BottlesDetector, PortProtonDetector
+from fling_manager.core.dotnet.detector import DotNetDetector
 from fling_manager.config.settings import ConfigManager
 from fling_manager.gui.widgets import GameComboBox, TrainerFilePicker, LogView, ProgressDialog
 
@@ -84,6 +85,7 @@ class MainWindow:
         tools_menu.add_command(label="Instalar dependencias sistema", command=self._install_system_deps)
         tools_menu.add_separator()
         tools_menu.add_command(label="Limpiar caché iconos", command=self._clear_icon_cache)
+        tools_menu.add_command(label="Eliminar Lanzador", command=self._delete_launcher)
 
         # Ayuda
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -160,7 +162,13 @@ class MainWindow:
             action_frame, text="▶ Lanzar Trainer",
             command=self._launch_trainer, bootstyle="success", width=20
         )
-        self.launch_btn.pack(side=tk.LEFT)
+        self.launch_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.delete_launcher_btn = tb.Button(
+            action_frame, text="🗑️ Eliminar Lanzador",
+            command=self._delete_launcher, bootstyle="danger", width=20
+        )
+        self.delete_launcher_btn.pack(side=tk.LEFT)
 
         # ===== LOG VIEW =====
         log_section = ttk.LabelFrame(self.main_frame, text="📋 Registro", padding=10)
@@ -359,7 +367,7 @@ class MainWindow:
         scripts_dir.mkdir(parents=True, exist_ok=True)
         desktop_dir.mkdir(parents=True, exist_ok=True)
 
-        # Buscar icono (placeholder por ahora)
+# Buscar icono (placeholder por ahora)
         icon_path = None
 
         try:
@@ -368,7 +376,7 @@ class MainWindow:
             self.log(f"   Ruta completa: {trainer_path}")
             self.log(f"   Prefijo: {self.current_game.prefix_path}")
             
-            # Para Persona 3 Reload, usar el prefix de P5R que tiene .NET 4.8 funcional
+            # Buscar prefix alternativo con .NET funcional (automático)
             trainer_prefix = None
             if self.current_game.app_id == '2161700':  # Persona 3 Reload
                 # Buscar prefix de Persona 5 Royal (1687950)
@@ -377,6 +385,31 @@ class MainWindow:
                         trainer_prefix = g.prefix_path
                         self.log(f"✅ Usando prefix de P5R para trainer: {trainer_prefix}")
                         break
+            
+            # Permitir que se use un prefix alternativo con .NET funcional
+            if not trainer_prefix:
+                # Run detection in background thread to avoid blocking UI
+                def find_working_prefix():
+                    for g in self.all_games:
+                        if g.id != self.current_game.id and g.prefix_path:
+                            detector = DotNetDetector(Path(g.prefix_path))
+                            if detector.is_dotnet48_installed()[0]:
+                                return g.prefix_path
+                    return None
+                
+                # Run detection in background
+                import threading
+                result = {}
+                def worker():
+                    result['prefix'] = find_working_prefix()
+                
+                thread = threading.Thread(target=worker, daemon=True)
+                thread.start()
+                thread.join(timeout=10.0)  # Wait max 10 seconds
+                
+                if 'prefix' in result and result['prefix']:
+                    trainer_prefix = result['prefix']
+                    self.log(f"✅ Usando prefix alternativo con .NET funcional: {trainer_prefix}")
             
             ok, script_path, desktop_path = self.launcher_builder.build_both(
                 game_data, trainer_path, scripts_dir, desktop_dir, icon_path,
@@ -408,6 +441,75 @@ class MainWindow:
             self.log(f"❌ Error creando lanzador: {e}", "error")
             self.log(error_detail, "debug")
             messagebox.showerror("Error", f"Error creando lanzador:\n{e}")
+
+    def _delete_launcher(self):
+        """Elimina el lanzador, el archivo .desktop y el trainer copiado en el prefix."""
+        if not self.current_game:
+            messagebox.showwarning("Sin juego", "Selecciona un juego primero")
+            return
+
+        # Confirmar eliminación
+        if not messagebox.askyesno(
+            "Confirmar eliminación",
+            f"¿Eliminar el lanzador y trainer copiado para '{self.current_game.name}'?\n\n"
+            f"Esto eliminará:\n"
+            f"  • Script: ~/.local/bin/fling-{self.current_game.id.replace('/', '_').replace(' ', '_')}.sh\n"
+            f"  • Desktop: ~/.local/share/applications/fling-{self.current_game.id.replace('/', '_').replace(' ', '_')}.desktop\n"
+            f"  • Trainer copiado en: {self.current_game.prefix_path}/drive_c/Trainers/ (si existe)",
+            icon=messagebox.WARNING
+        ):
+            return
+
+        safe_id = self.current_game.id.replace('/', '_').replace(' ', '_')
+        
+        # 1. Eliminar script .sh
+        script_path = Path.home() / ".local" / "bin" / f"fling-{safe_id}.sh"
+        if script_path.exists():
+            try:
+                script_path.unlink()
+                self.log(f"✅ Script eliminado: {script_path}")
+            except Exception as e:
+                self.log(f"⚠ Error eliminando script: {e}", "warning")
+
+        # 2. Eliminar archivo .desktop
+        desktop_path = Path.home() / ".local" / "share" / "applications" / f"fling-{safe_id}.desktop"
+        if desktop_path.exists():
+            try:
+                desktop_path.unlink()
+                self.log(f"✅ Entrada .desktop eliminada: {desktop_path}")
+            except Exception as e:
+                self.log(f"⚠ Error eliminando .desktop: {e}", "warning")
+
+        # 3. Eliminar trainer copiado en el prefix del juego
+        if self.current_game.prefix_path:
+            trainer_name = Path(self.current_trainer_path).stem.replace(' ', '_').replace('(', '').replace(')', '') if self.current_trainer_path else ""
+            if trainer_name:
+                trainer_path_in_prefix = Path(self.current_game.prefix_path) / "drive_c" / "Trainers" / f"{trainer_name}.exe"
+                if trainer_path_in_prefix.exists():
+                    try:
+                        trainer_path_in_prefix.unlink()
+                        self.log(f"✅ Trainer copiado eliminado: {trainer_path_in_prefix}")
+                    except Exception as e:
+                        self.log(f"⚠ Error eliminando trainer copiado: {e}", "warning")
+
+        # 4. Eliminar de config
+        self.config.remove_trainer(self.current_game.id)
+        self.log(f"✅ Configuración de trainer eliminada")
+
+        # 5. Limpiar icono extraído si existe
+        if self.current_trainer_path:
+            trainer_name = Path(self.current_trainer_path).stem.replace(' ', '_').replace('(', '').replace(')', '')
+            icon_dir = Path.home() / ".local" / "share" / "fling-trainer-manager" / "icons" / trainer_name
+            if icon_dir.exists():
+                try:
+                    import shutil
+                    shutil.rmtree(icon_dir)
+                    self.log(f"✅ Directorio de iconos eliminado: {icon_dir}")
+                except Exception as e:
+                    self.log(f"⚠ Error eliminando iconos: {e}", "warning")
+
+        self.log(f"✅ Lanzador y archivos asociados eliminados para {self.current_game.name}")
+        messagebox.showinfo("Eliminado", f"Lanzador y archivos de '{self.current_game.name}' eliminados correctamente.")
 
     def _resolve_trainer_path(self, path: str) -> Optional[str]:
         """Resuelve la ruta completa del trainer si es relativa o solo nombre."""
@@ -442,7 +544,7 @@ class MainWindow:
         return None
 
     def _launch_trainer(self):
-        """Lanza el trainer usando el script generado con TTY (script -q -c)."""
+        """Lanza el trainer usando el script generado con setsid/nohup para desacoplar correctamente."""
         if not self.current_game:
             messagebox.showwarning("Sin juego", "Selecciona un juego primero")
             return
@@ -474,13 +576,11 @@ class MainWindow:
 
         def worker():
             try:
-                # Usar 'script -q -c' para proporcionar TTY al trainer (necesario para apps .NET/Wine)
-                # El script ya exporta todas las vars de entorno necesarias
-                cmd = [
-                    'script', '-q', '-c', str(script_path), '/dev/null'
-                ]
+                # Usar setsid + nohup para desacoplar correctamente el proceso
+                # Esto evita problemas con PTY que interfieren con Wine/Proton
+                cmd = ['setsid', 'nohup', str(script_path)]
                 
-                # Lanzar en background sin capturar output (el trainer crea su propia ventana)
+                # Lanzar completamente desacoplado
                 proc = subprocess.Popen(
                     cmd,
                     stdin=subprocess.DEVNULL,

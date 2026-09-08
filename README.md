@@ -4,14 +4,14 @@ Gestor gráfico para trainers de Fling en Linux. Compatible con **Steam, Lutris,
 
 ## Características
 
-- 🎮 **Detección automática** de juegos en Steam, Lutris, Heroic, Legendary, Bottles y PortProton
-- 🎯 **Selección visual** de trainer (.exe) con file picker
-- 🔧 **Instalación automática** de dependencias: .NET 4.8, VC++ 2019/2022, d3dx9-11, corefonts
-- 🔐 **Sudo prompt integrado** para instalación de dependencias de sistema (32-bit)
-- 🚀 **Creación de lanzadores** funcionales (.sh + .desktop) para menú de aplicaciones
-- 🎨 **Interfaz moderna** con ttkbootstrap (tema darkly por defecto)
-- 📋 **Log detallado** con colores y timestamps
-- 💾 **Configuración persistente** en JSON (~/.config/fling-trainer-manager/)
+- **Detección automática** de juegos en Steam, Lutris, Heroic, Legendary, Bottles y PortProton
+- **Selección visual** de trainer (.exe) con file picker
+- **Instalación automática** de dependencias: .NET 4.8, VC++ 2019/2022, d3dx9-11, corefonts
+- **Sudo prompt integrado** para instalación de dependencias de sistema (32-bit)
+-  **Creación de lanzadores** funcionales (.sh + .desktop) para menú de aplicaciones
+-  **Interfaz moderna** con ttkbootstrap (tema darkly por defecto)
+-  **Log detallado** con colores y timestamps
+-  **Configuración persistente** en JSON (~/.config/fling-trainer-manager/)
 
 ## Requisitos
 
@@ -136,4 +136,4 @@ exec "/home/david/.local/share/Steam/steamapps/common/Proton - Experimental/prot
 
 ## Licencia
 
-MIT
+MIT# Fling-Prototipo-Linux-

@@ -4,6 +4,8 @@ from typing import Dict, Any, Optional, Tuple
 import os
 import shutil
 
+from .icon_extractor import IconExtractor
+
 
 class LauncherBuilder:
     """Genera scripts de lanzamiento y archivos .desktop para trainers."""
@@ -16,6 +18,18 @@ class LauncherBuilder:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        self.icon_extractor = IconExtractor()
+
+    def extract_trainer_icon(self, trainer_path: str, trainer_name: str) -> str:
+        """
+        Extrae el icono del trainer.exe.
+        Retorna la ruta del icono o una cadena vacía si falla (usará fallback genérico).
+        """
+        success, result = self.icon_extractor.extract_icon(trainer_path, trainer_name)
+        if success:
+            return result
+        # Fallback: icono genérico (vacío para que el template use fallback)
+        return ""
 
     def copy_trainer_to_prefix(self, trainer_path: str, prefix_path: str) -> Tuple[bool, str]:
         """Copia el trainer al prefix del juego en C:\\Trainers\\"""
@@ -114,6 +128,11 @@ class LauncherBuilder:
         else:
             # Fallback: usar ruta Z: (legacy)
             trainer_windows_path = f"Z:{trainer_path}"
+
+        # Extraer icono del trainer si no se proporcionó uno
+        if not icon_path:
+            trainer_name = Path(trainer_path).stem
+            icon_path = self.extract_trainer_icon(trainer_path, trainer_name)
 
         # Preparar game_data para el template - usar el prefix del trainer para WINEPREFIX
         template_data = {**game_data}

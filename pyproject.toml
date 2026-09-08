@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fling-trainer-manager"
-version = "1.0.0"
+version = "0.0.2"
 description = "Gestor gráfico para trainers de Fling en Linux (Steam, Lutris, Heroic, Legendary, Bottles, PortProton)"
 readme = "README.md"
 authors = [{name = "Fling Trainer Manager"}]
