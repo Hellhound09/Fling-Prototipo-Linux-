@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fling-trainer-manager"
+version = "1.0.0"
+description = "Gestor gráfico para trainers de Fling en Linux (Steam, Lutris, Heroic, Legendary, Bottles, PortProton)"
+readme = "README.md"
+authors = [{name = "Fling Trainer Manager"}]
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = [
+    "ttkbootstrap>=1.10.0",
+    "requests>=2.31.0",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+fling-trainer-manager = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fling_manager*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"

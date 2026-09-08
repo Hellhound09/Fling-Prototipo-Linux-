@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Auto-generado por Fling Trainer Manager
+# Juego: {{ name }} ({{ launcher }})
+# Trainer: {{ trainer_path }}
+
+set -euo pipefail
+
+GAME_ID="{{ app_id }}"
+PREFIX="{{ prefix_path }}"
+PROTON="{{ proton_path }}"
+TRAINER="{{ trainer_path }}"
+
+# Variables de entorno Steam/Proton
+export STEAM_COMPAT_APP_ID="{{ app_id }}"
+export STEAM_COMPAT_DATA_PATH="{{ compatdata_path }}"
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="{{ steam_install_path }}"
+export STEAM_COMPAT_INSTALL_PATH="{{ install_path }}"
+export STEAM_COMPAT_MEDIA_PATH="{{ compatdata_path }}/reports"
+export WINEPREFIX="{{ prefix_path }}"
+export MANGOHUD=0
+export DWM_DISABLE=1
+export WINEDEBUG=-all
+
+# Matar wineserver previo para evitar version mismatch
+pkill -9 wineserver 2>/dev/null || true
+sleep 1
+
+# Ejecutar trainer con EL MISMO Proton que el juego
+exec "{{ proton_path }}" run "{{ trainer_path }}"

@@ -1,0 +1,1 @@
+"""Fling Trainer Manager - Core package."""
