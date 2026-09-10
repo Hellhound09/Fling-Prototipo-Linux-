@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 import logging
 
+from .sudo_helper import SudoHelper
+
 logger = logging.getLogger(__name__)
 
 # Dependencias 32-bit en repos oficiales Arch/CachyOS
@@ -46,6 +48,7 @@ class SystemDepsManager:
 
     def __init__(self, parent_window=None):
         self.parent_window = parent_window
+        self.sudo_helper = SudoHelper(parent_window)
 
     def _detect_gpu(self) -> str:
         """Detecta vendor GPU via lspci."""
@@ -135,21 +138,21 @@ class SystemDepsManager:
         return True, f"Dependencias 32-bit instaladas correctamente"
 
     def _run_pacman_sy(self) -> Tuple[bool, str]:
-        """Ejecuta pacman -Sy"""
-        try:
-            result = subprocess.run(['sudo', 'pacman', '-Sy'], capture_output=True, text=True, timeout=30)
-            return result.returncode == 0, result.stdout + result.stderr
-        except Exception as e:
-            return False, str(e)
+        """Ejecuta pacman -Sy usando sudo con GUI."""
+        return self.sudo_helper.run_with_sudo(
+            ['pacman', '-Sy'],
+            prompt_message="Actualizando base de datos de paquetes...",
+            timeout=60  # 1 minuto para actualizar DB
+        )
 
     def _run_pacman_install(self, packages: List[str]) -> Tuple[bool, str]:
-        """Instala paquetes con pacman"""
-        try:
-            cmd = ['sudo', 'pacman', '-S', '--needed', '--noconfirm'] + packages
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            return result.returncode == 0, result.stdout + result.stderr
-        except Exception as e:
-            return False, str(e)
+        """Instala paquetes con pacman usando sudo con GUI."""
+        cmd = ['pacman', '-S', '--needed', '--noconfirm'] + packages
+        return self.sudo_helper.run_with_sudo(
+            cmd,
+            prompt_message=f"Instalando {len(packages)} paquetes 32-bit (repos oficiales)...",
+            timeout=300  # 5 minutos para instalaciones
+        )
 
     def _find_aur_helper(self) -> Optional[str]:
         """Detecta yay o paru"""

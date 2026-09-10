@@ -56,9 +56,10 @@ else:
                 os.unlink(self._askpass_script)
             raise
 
-    def run_with_sudo(self, command: List[str], prompt_message: str = "") -> Tuple[bool, str]:
+    def run_with_sudo(self, command: List[str], prompt_message: str = "", timeout: int = 120) -> Tuple[bool, str]:
         """
         Ejecuta comando con sudo usando askpass GUI.
+        timeout: tiempo máximo en segundos (default 120s, usar 300 para instalaciones de paquetes)
         """
         if not self._askpass_script:
             self._create_askpass_script()
@@ -92,11 +93,11 @@ else:
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=timeout
             )
             return result.returncode == 0, result.stdout + result.stderr
         except subprocess.TimeoutExpired:
-            return False, "Timeout ejecutando comando con sudo"
+            return False, f"Timeout ejecutando comando con sudo ({timeout}s)"
         except Exception as e:
             return False, str(e)
 
@@ -113,13 +114,14 @@ else:
         self.cleanup()
 
 
-def run_with_sudo_gui(command: List[str], parent: Optional[tk.Tk] = None, prompt_message: str = "") -> Tuple[bool, str]:
+def run_with_sudo_gui(command: List[str], parent: Optional[tk.Tk] = None, prompt_message: str = "", timeout: int = 120) -> Tuple[bool, str]:
     """
     Función de conveniencia para ejecutar comando con sudo y GUI.
+    timeout: tiempo máximo en segundos (default 120s)
     """
     helper = SudoAskPassHelper(parent)
     try:
-        return helper.run_with_sudo(command, prompt_message)
+        return helper.run_with_sudo(command, prompt_message, timeout)
     finally:
         helper.cleanup()
 
@@ -131,8 +133,8 @@ class SudoHelper:
         self.helper = SudoAskPassHelper(parent_window)
 
     def run_with_sudo(self, command: List[str], parent: Optional[tk.Tk] = None,
-                      prompt_message: str = "") -> Tuple[bool, str]:
-        return self.helper.run_with_sudo(command, prompt_message)
+                      prompt_message: str = "", timeout: int = 120) -> Tuple[bool, str]:
+        return self.helper.run_with_sudo(command, prompt_message, timeout)
 
     @staticmethod
     def check_sudo_available() -> bool:
