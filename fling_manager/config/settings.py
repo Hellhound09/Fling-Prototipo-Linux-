@@ -34,6 +34,7 @@ class ConfigManager:
             "install_system_deps": True,
             "default_proton": "auto",
             "theme": "darkly",
+            "use_system_theme": True,
             "window_geometry": "1000x700",
         }
 

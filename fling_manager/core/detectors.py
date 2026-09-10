@@ -214,7 +214,125 @@ class LutrisDetector:
         self.db_path = self.lutris_path / "pga.db"
         self.games_path = self.lutris_path / "games"
 
+    @staticmethod
+    def _is_wine_runner(runner: str) -> bool:
+        """Verifica si el runner es una variante de Wine."""
+        if not runner:
+            return False
+        runner_lower = runner.lower()
+        wine_variants = [
+            'wine', 'wine-ge', 'wine-staging', 'wine-ge-proton',
+            'wine-vanilla', 'wine-ge-proton', 'wine-staging',
+            'proton', 'proton-ge', 'wine-valve', 'wine-valveproton',
+            'wine-tkg', 'wine-lutris', 'proton', 'proton-ge',
+            'wine-ge-custom', 'wine-tkg', 'wine-tkg-git',
+            'wine-lutris', 'wine-lol', 'wine-wow64'
+        ]
+        return any(variant in runner_lower for variant in wine_variants)
+
+    def _is_wine_game(self, runner: str, config_data: dict) -> bool:
+        """Determina si el juego usa Wine (incluyendo variantes)."""
+        runner = runner or 'wine'
+        if self._is_wine_runner(runner):
+            return True
+        # Verificar en config_data si hay configuración de wine
+        wine_config = config_data.get('wine', {})
+        return bool(wine_config.get('version') or wine_config.get('path'))
+
+    def _find_wine_executable(self, wine_version: str = "", wine_path: str = "") -> Optional[str]:
+        """Busca el ejecutable de Wine en varias ubicaciones."""
+        # 1. Ruta explícita en config
+        if wine_path and Path(wine_path).exists():
+            return wine_path
+        
+        # 2. Buscar en runners de Lutris
+        if wine_version:
+            wine_runner_path = self.lutris_path / "runners" / "wine" / wine_version
+            if wine_runner_path.exists():
+                for exe_name in ['wine', 'wine64', 'wine.bin']:
+                    exe_path = wine_runner_path / exe_name
+                    if exe_path.exists():
+                        return str(exe_path)
+        
+        # 3. Buscar en runners de Lutris genéricos
+        runners_wine = self.lutris_path / "runners" / "wine"
+        if runners_wine.exists():
+            for version_dir in runners_wine.iterdir():
+                if version_dir.is_dir():
+                    for exe_name in ['wine', 'wine64', 'wine.bin']:
+                        exe_path = version_dir / exe_name
+                        if exe_path.exists():
+                            return str(exe_path)
+        
+        # 4. Buscar wine del sistema
+        for exe_name in ['wine', 'wine64']:
+            try:
+                result = subprocess.run(['which', exe_name], capture_output=True, text=True, timeout=2)
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            except Exception:
+                pass
+        
+        return None
+
+    def _resolve_wine_executable(self, config_data: dict, wine_version: str, wine_path: str) -> Optional[str]:
+        """Resuelve el ejecutable de Wine."""
+        # 1. Ruta explícita en config
+        if wine_path and Path(wine_path).exists():
+            return wine_path
+        
+        # 3. Buscar wine del sistema
+        return self._find_wine_executable("", "")
+
+    def _resolve_wine_prefix(self, config_data: dict, row) -> str:
+        """Resuelve el prefijo Wine con múltiples fallbacks."""
+        # 1. Desde config YAML
+        prefix_path = config_data.get('wine', {}).get('prefix', '')
+        if prefix_path and Path(prefix_path).exists():
+            return prefix_path
+        
+        # 2. Desde database (row['directory'] puede contener el prefix)
+        if row['directory']:
+            dir_path = Path(row['directory'])
+            # Verificar si el directorio es el prefix (contiene drive_c)
+            if (dir_path / "drive_c").exists():
+                return str(dir_path)
+            # Verificar si hay prefix en subdirectorio
+            for sub in ['prefix', 'wineprefix', '.wine']:
+                prefix_candidate = dir_path / sub
+                if prefix_candidate.exists():
+                    return str(prefix_candidate)
+        
+        # 3. Prefijo por defecto de Lutris
+        default_prefix = Path.home() / ".local" / "share" / "lutris" / "prefixes" / row['slug']
+        if default_prefix.exists():
+            return str(default_prefix)
+        
+        return ""
+
+    def _find_executable(self, install_path: str, row, config_data: dict) -> str:
+        """Encuentra el ejecutable del juego con múltiples estrategias."""
+        # 1. Desde database
+        if row['executable']:
+            exe_path = Path(row['directory']) / row['executable']
+            if exe_path.exists():
+                return row['executable']
+        
+        # 2. Desde config YAML
+        game_exe = config_data.get('game', {}).get('exe', '')
+        if game_exe:
+            exe_path = Path(row['directory']) / game_exe
+            if exe_path.exists():
+                return game_exe
+        
+        # 3. Buscar .exe en directorio de instalación
+        if row['directory']:
+            return self._detect_main_exe(row['directory'])
+        
+        return ""
+
     def detect_games(self) -> List[Game]:
+        """Detecta juegos instalados en Lutris, incluyendo variantes de Wine/Proton."""
         games = []
         if not self.db_path.exists():
             return games
@@ -245,21 +363,21 @@ class LutrisDetector:
                 wine_version = config_data.get('wine', {}).get('version', '')
                 wine_path = config_data.get('wine', {}).get('path', '')
 
-                # Detectar proton path si es wine
-                proton_path = ""
-                if runner == "wine" and wine_path:
-                    proton_path = wine_path
-                elif runner == "wine" and wine_version:
-                    # Buscar en ~/.local/share/lutris/runners/wine/
-                    wine_runner_path = self.lutris_path / "runners" / "wine" / wine_version
-                    if wine_runner_path.exists():
-                        proton_path = str(wine_runner_path)
+                # Determinar si es un juego Wine (incluyendo variantes)
+                is_wine = self._is_wine_game(runner, config_data)
 
-                # Detectar prefijo
-                prefix_path = config_data.get('wine', {}).get('prefix', '')
-                if not prefix_path and row['directory']:
-                    # Prefijo por defecto de Lutris
-                    prefix_path = str(Path.home() / ".local" / "share" / "lutris" / "prefixes" / row['slug'])
+                # Resolver ejecutable de Wine/Proton
+                proton_path = ""
+                if self._is_wine_game(runner, config_data):
+                    wine_exe = self._resolve_wine_executable(config_data, wine_version, wine_path)
+                    if wine_exe:
+                        proton_path = wine_exe
+
+                # Resolver prefijo Wine
+                prefix_path = self._resolve_wine_prefix(config_data, row)
+
+                # Encontrar ejecutable del juego
+                exe_name = self._find_executable(row['directory'], row, config_data)
 
                 games.append(Game(
                     id=f"lutris_{row['slug']}",
@@ -270,7 +388,7 @@ class LutrisDetector:
                     prefix_path=prefix_path,
                     proton_path=proton_path,
                     runner=runner,
-                    exe_name=Path(row['executable']).name if row['executable'] else "",
+                    exe_name=exe_name,
                 ))
             conn.close()
         except Exception:
@@ -279,8 +397,7 @@ class LutrisDetector:
 
 
 class HeroicDetector:
-    """Detecta juegos de Heroic Games Launcher."""
-
+    
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = Path(config_path or os.path.expanduser("~/.config/heroic"))
         self.games_config_path = self.config_path / "GamesConfig"

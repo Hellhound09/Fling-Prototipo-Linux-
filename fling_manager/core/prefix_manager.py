@@ -112,6 +112,41 @@ class PrefixManager:
 
         return True, "Perfil completo instalado:\n" + "\n".join(f"  {'✓' if r[1] else '⚠'} {r[0]}" for r in results)
 
+    def install_base_profile(self, install_system_deps: bool = True,
+                             progress_callback=None) -> Tuple[bool, str]:
+        """
+        Instala perfil base SIN .NET: sistema 32-bit → Wine prep → winetricks requeridas.
+        Para prefixes que ya tienen .NET o no lo necesitan.
+        """
+        results = []
+
+        # 1. Dependencias de sistema (32-bit)
+        if install_system_deps:
+            if progress_callback:
+                progress_callback("Verificando dependencias de sistema (32-bit)...")
+            success, msg = self.system_deps.install(progress_callback)
+            results.append(("Sistema 32-bit", success, msg))
+            if not success:
+                return False, f"Fallo en dependencias de sistema: {msg}"
+
+        # 2. Preparar entorno Wine (win10, riched30, DLL overrides)
+        if progress_callback:
+            progress_callback("Preparando entorno Wine (Windows 10)...")
+        success, msg = self.wine_env.prepare(progress_callback)
+        results.append(("Wine prep", success, msg))
+        if not success:
+            return False, f"Fallo preparando Wine: {msg}"
+
+        # 3. Winetricks solo requeridas (d3dx9, d3dx10, d3dx11_43, corefonts)
+        if progress_callback:
+            progress_callback("Instalando dependencias Wine requeridas (d3dx, corefonts)...")
+        success, msg = self.winetricks_mgr.install_required_only(progress_callback)
+        results.append(("Winetricks base", success, msg))
+        if not success:
+            return False, f"Fallo en winetricks requeridas: {msg}"
+
+        return True, "Perfil base instalado:\n" + "\n".join(f"  {'✓' if r[1] else '⚠'} {r[0]}" for r in results)
+
     def run_in_prefix(self, command: List[str], env_vars: Optional[dict] = None) -> Tuple[int, str, str]:
         """Ejecuta comando dentro del prefijo Wine."""
         if not self.wine_bin:
@@ -156,11 +191,6 @@ class PrefixManager:
             return -1, "", "Timeout"
         except Exception as e:
             return -1, "", str(e)
-
-    def kill_wineserver(self):
-        """Mata wineserver para evitar version mismatch."""
-        subprocess.run(['pkill', '-9', 'wineserver'], capture_output=True)
-        time.sleep(1)
 
     def verify_installation(self) -> dict:
         """Verifica estado completo de la instalación."""

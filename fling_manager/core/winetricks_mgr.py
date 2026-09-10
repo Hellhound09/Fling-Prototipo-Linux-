@@ -72,6 +72,24 @@ class WinetricksManager:
 
         return True, "Dependencias Wine instaladas correctamente"
 
+    def install_required_only(self, progress_callback: Optional[Callable] = None) -> Tuple[bool, str]:
+        """
+        Instala solo dependencias REQUERIDAS (d3dx9, d3dx10, d3dx11_43, corefonts).
+        No instala opcionales (vcrun2019, vcrun2022).
+        """
+        results = []
+        
+        if progress_callback:
+            progress_callback("Instalando dependencias Wine requeridas (d3dx, corefonts)...")
+        
+        for verb in self.REQUIRED_VERBS:
+            success, msg = self._install_verb(verb, progress_callback, allow_failure=False)
+            results.append((verb, success, msg))
+            if not success:
+                return False, f"Dependencia requerida {verb} falló: {msg}"
+        
+        return True, "Dependencias Wine requeridas instaladas correctamente"
+
     def _install_verb(self, verb: str, progress_callback: Optional[Callable] = None, 
                       allow_failure: bool = False) -> Tuple[bool, str]:
         """Instala un verb de winetricks."""

@@ -10,20 +10,79 @@ PREFIX="{{ prefix_path }}"
 PROTON="{{ proton_path }}"
 TRAINER="{{ trainer_path }}"
 
-# Variables de entorno Steam/Proton
+# ========== VARIABLES STEAM/PROTON BASE ==========
 export STEAM_COMPAT_APP_ID="{{ app_id }}"
 export STEAM_COMPAT_DATA_PATH="{{ compatdata_path }}"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="{{ steam_install_path }}"
 export STEAM_COMPAT_INSTALL_PATH="{{ install_path }}"
 export STEAM_COMPAT_MEDIA_PATH="{{ compatdata_path }}/reports"
 export WINEPREFIX="{{ prefix_path }}"
+
+# ========== VARIABLES CRITICAS FALTANTES (protontricks parity) ==========
+# Bind mounts: prefix + game directory
+export STEAM_COMPAT_MOUNTS="{{ compatdata_path }}/pfx:{{ install_path }}"
+
+# Steam identification (anti-cheat / trainer validation)
+export SteamAppId="{{ app_id }}"
+export SteamGameId="{{ app_id }}"
+
+# ========== PROTON ENVIRONMENT (GE-Proton parity) ==========
+# Proton paths
+PROTON_DIST_PATH="{{ proton_path }}/../dist"
+export PROTON_PATH="{{ proton_path }}/.."
+export PROTON_DIST_PATH
+
+# Wine DLL paths
+export WINEDLLPATH="{{ proton_path }}/../dist/lib64/wine:{{ proton_path }}/../dist/lib/wine"
+
+# Prepend Proton bin to PATH
+export PATH="{{ proton_path }}/../dist/bin:$PATH"
+
+# ========== WINEDLLOVERRIDES (DXVK + vkd3d-proton + nvapi) ==========
+# DXVK
+export WINEDLLOVERRIDES="dxgi=n;d3d9=n;d3d10core=n;d3d11=n"
+# vkd3d-proton
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};d3d12=n;d3d12core=n"
+# nvapi
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};nvapi=n;nvapi64=n;nvofapi64=n;nvcuda=b"
+# BattlEye (block)
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};beclient=b,n;beclient_x64=b,n"
+
+# ========== DEFAULTS (GE-Proton parity) ==========
+export WINE_LARGE_ADDRESS_AWARE=1
+export DXVK_ENABLE_NVAPI=1
+
+# ========== GStreamer ==========
+if [ -d "{{ proton_path }}/../dist/lib/gstreamer-1.0" ]; then
+    export GST_PLUGIN_SYSTEM_PATH_1_0="{{ proton_path }}/../dist/lib64/gstreamer-1.0:{{ proton_path }}/../dist/lib/gstreamer-1.0"
+    export WINE_GST_REGISTRY_DIR="{{ compatdata_path }}/gstreamer-1.0"
+fi
+
+# ========== wineserver detection (protontricks approach) ==========
+# Try to find existing wineserver for this prefix and copy critical env vars
+wineserver_pid=$(pgrep -f "wineserver.*${WINEPREFIX}" | head -1)
+if [ -n "$wineserver_pid" ] && [ "$wineserver_pid" != "$$" ]; then
+    # Copy WINEESYNC/WINEFSYNC from existing wineserver
+    wineserver_env=$(xargs -0 -L1 -a "/proc/${wineserver_pid}/environ" 2>/dev/null || true)
+    for var in WINEESYNC WINEFSYNC; do
+        val=$(echo "$wineserver_env" | grep "^${var}=" || true)
+        if [ -n "$val" ]; then
+            export "$val"
+        fi
+    done
+fi
+
+# Defaults if no wineserver found
+if [ -z "$WINEFSYNC" ] && [ -z "$PROTON_NO_FSYNC" ]; then
+    export WINEFSYNC=1
+fi
+if [ -z "$WINEESYNC" ] && [ -z "$PROTON_NO_ESYNC" ]; then
+    export WINEESYNC=1
+fi
+
 export MANGOHUD=0
 export DWM_DISABLE=1
 export WINEDEBUG=-all
 
-# Matar wineserver previo para evitar version mismatch
-pkill -9 wineserver 2>/dev/null || true
-sleep 1
-
-# Ejecutar trainer con EL MISMO Proton que el juego
+# ========== EJECUTAR ==========
 exec "{{ proton_path }}" run "{{ trainer_path }}"

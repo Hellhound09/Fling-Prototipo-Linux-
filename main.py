@@ -14,8 +14,10 @@ from fling_manager.core.game_model import Game, TrainerConfig
 from fling_manager.core.detectors import GameDetectorManager
 from fling_manager.core.prefix_manager import PrefixManager, SudoHelper
 from fling_manager.core.launcher_builder import LauncherBuilder, create_default_templates
+from fling_manager.core.proton_launcher import ProtonLauncher
 from fling_manager.core.detectors import SteamDetector, LutrisDetector, HeroicDetector, LegendaryDetector, BottlesDetector, PortProtonDetector
 from fling_manager.core.dotnet.detector import DotNetDetector
+from fling_manager.core.theme_detector import ThemeDetector
 from fling_manager.config.settings import ConfigManager
 from fling_manager.gui.widgets import GameComboBox, TrainerFilePicker, LogView, ProgressDialog
 
@@ -36,6 +38,10 @@ class MainWindow:
         self.launcher_builder = None
         self.current_game: Optional[Game] = None
         self.current_trainer_path: Optional[str] = None
+
+        # Theme detector for live reload
+        self.theme_detector = ThemeDetector()
+        self._theme_callback_registered = False
 
         # Variables UI
         self.detected_launchers: Dict[str, Any] = {}
@@ -61,11 +67,28 @@ class MainWindow:
 
     def _setup_style(self):
         style = tb.Style()
-        theme = self.config.get("theme", "darkly")
+        
+        # Use system theme if enabled, otherwise use saved theme
+        use_system_theme = self.config.get("use_system_theme", True)
+        
+        if use_system_theme:
+            # Auto-detect system theme
+            detected_theme = self.theme_detector.get_mapped_theme()
+            self.config.set("theme", detected_theme)
+            theme_to_use = detected_theme
+        else:
+            theme_to_use = self.config.get("theme", "darkly")
+        
         try:
-            style.theme_use(theme)
+            style.theme_use(theme_to_use)
         except Exception:
             style.theme_use("darkly")
+
+        # Start live theme monitoring if not already started
+        if not self._theme_callback_registered:
+            self.theme_detector.register_callback(self._on_system_theme_changed)
+            self.theme_detector.start_monitoring(interval=2.0)
+            self._theme_callback_registered = True
 
     def _create_menu(self):
         menubar = tk.Menu(self.root)
@@ -146,11 +169,17 @@ class MainWindow:
         action_frame = ttk.Frame(self.main_frame)
         action_frame.pack(fill=tk.X, pady=(15, 0))
 
-        self.install_deps_btn = tb.Button(
-            action_frame, text="🔧 Instalar .NET 4.8 + VC++ + d3dx",
-            command=self._install_deps, bootstyle="warning", width=35
+        self.install_base_btn = tb.Button(
+            action_frame, text="🔧 Instalar Base (Sistema 32-bit + Wine + d3dx/corefonts)",
+            command=self._install_base, bootstyle="warning", width=45
         )
-        self.install_deps_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.install_base_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.install_dotnet_btn = tb.Button(
+            action_frame, text="📦 Instalar .NET 4.8",
+            command=self._install_dotnet, bootstyle="info", width=20
+        )
+        self.install_dotnet_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.create_launcher_btn = tb.Button(
             action_frame, text="🚀 Crear Lanzador",
@@ -269,8 +298,8 @@ class MainWindow:
         self.current_trainer_path = path
         self.log(f"📁 Trainer: {Path(path).name}")
 
-    def _install_deps(self):
-        """Instala dependencias completas en el prefijo del juego."""
+    def _install_base(self):
+        """Instala perfil base SIN .NET: Sistema 32-bit + Wine prep + Winetricks base."""
         if not self.current_game:
             messagebox.showwarning("Sin juego", "Selecciona un juego primero")
             return
@@ -283,31 +312,7 @@ class MainWindow:
             messagebox.showwarning("Sin Proton", "No se detectó Proton para este juego")
             return
 
-        # Verificar instalador .NET (auto-descarga si no existe)
-        dotnet_installer = self.config.get_dotnet_installer()
-        if not dotnet_installer or not Path(dotnet_installer).exists():
-            # Preguntar si quiere auto-descargar
-            if messagebox.askyesno(
-                "Instalador .NET 4.8 no encontrado",
-                "No se encontró el instalador de .NET 4.8.\n\n"
-                "¿Desea descargarlo automáticamente desde Microsoft?\n"
-                "(~116 MB, se guardará en carpeta temporal)"
-            ):
-                dotnet_installer = None  # Se auto-descargará en PrefixManager
-                self.log("📥 Se descargará .NET 4.8 automáticamente desde Microsoft")
-            else:
-                # Permitir selección manual como fallback
-                path = filedialog.askopenfilename(
-                    title="Seleccionar instalador .NET 4.8 (NDP48-x86-x64-AllOS-ENU.exe)",
-                    filetypes=[("Ejecutable", "*.exe"), ("Todos", "*.*")]
-                )
-                if not path:
-                    return
-                self.config.set_dotnet_installer(path)
-                dotnet_installer = path
-
-        # Crear ProgressDialog
-        dialog = ProgressDialog(self.root, "Instalando dependencias")
+        dialog = ProgressDialog(self.root, "Instalando perfil base (sin .NET)")
         dialog.log(f"Juego: {self.current_game.name}")
         dialog.log(f"Prefijo: {self.current_game.prefix_path}")
         dialog.log(f"Proton: {self.current_game.proton_path}")
@@ -324,12 +329,83 @@ class MainWindow:
                     self.root.after(0, lambda: dialog.update_status(msg))
                     self.root.after(0, lambda: dialog.log(msg, "info"))
 
-                success, msg = prefix_mgr.install_full_profile(
-                    dotnet_installer=dotnet_installer,
+                success, msg = prefix_mgr.install_base_profile(
                     install_system_deps=self.config.get("install_system_deps", True),
                     progress_callback=progress_cb
                 )
                 self.root.after(0, lambda: dialog.finish(success, msg))
+            except Exception as e:
+                self.root.after(0, lambda: dialog.finish(False, f"Error: {e}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+        dialog.wait()
+
+    def _install_dotnet(self):
+        """Instala .NET 4.8 Runtime en el prefijo (opcional)."""
+        if not self.current_game:
+            messagebox.showwarning("Sin juego", "Selecciona un juego primero")
+            return
+
+        if not self.current_game.prefix_path:
+            messagebox.showwarning("Sin prefijo", "No se detectó prefijo Wine para este juego")
+            return
+
+        if not self.current_game.proton_path:
+            messagebox.showwarning("Sin Proton", "No se detectó Proton para este juego")
+            return
+
+        # Verificar instalador .NET (auto-descarga si no existe)
+        dotnet_installer = self.config.get_dotnet_installer()
+        if not dotnet_installer or not Path(dotnet_installer).exists():
+            if messagebox.askyesno(
+                "Instalador .NET 4.8 no encontrado",
+                "No se encontró el instalador de .NET 4.8.\n\n"
+                "¿Desea descargarlo automáticamente desde Microsoft?\n"
+                "(~116 MB, se guardará en carpeta temporal)"
+            ):
+                dotnet_installer = None
+                self.log("📥 Se descargará .NET 4.8 automáticamente desde Microsoft")
+            else:
+                path = filedialog.askopenfilename(
+                    title="Seleccionar instalador .NET 4.8 (NDP48-x86-x64-AllOS-ENU.exe)",
+                    filetypes=[("Ejecutable", "*.exe"), ("Todos", "*.*")]
+                )
+                if not path:
+                    return
+                self.config.set_dotnet_installer(path)
+                dotnet_installer = path
+
+        dialog = ProgressDialog(self.root, "Instalando .NET 4.8 Runtime")
+        dialog.log(f"Juego: {self.current_game.name}")
+        dialog.log(f"Prefijo: {self.current_game.prefix_path}")
+        dialog.log(f"Proton: {self.current_game.proton_path}")
+
+        def worker():
+            try:
+                prefix_mgr = PrefixManager(
+                    self.current_game.prefix_path,
+                    self.current_game.proton_path,
+                    self.root
+                )
+
+                def progress_cb(msg):
+                    self.root.after(0, lambda: dialog.update_status(msg))
+                    self.root.after(0, lambda: dialog.log(msg, "info"))
+
+                # Usar dotnet_mgr directamente para instalar solo .NET
+                from fling_manager.core.dotnet.manager import DotNetManager
+                dotnet_mgr = DotNetManager(
+                    Path(self.current_game.prefix_path),
+                    Path(self.current_game.proton_path)
+                )
+                result = dotnet_mgr.ensure_dotnet48(progress_cb)
+                
+                if result.success:
+                    msg = f".NET 4.8 instalado correctamente: {result.message}"
+                else:
+                    msg = f"Fallo instalando .NET 4.8: {result.message}"
+                
+                self.root.after(0, lambda: dialog.finish(result.success, msg))
             except Exception as e:
                 self.root.after(0, lambda: dialog.finish(False, f"Error: {e}"))
 
@@ -411,7 +487,7 @@ class MainWindow:
                     trainer_prefix = result['prefix']
                     self.log(f"✅ Usando prefix alternativo con .NET funcional: {trainer_prefix}")
             
-            ok, script_path, desktop_path = self.launcher_builder.build_both(
+            ok, trainer_windows_path, desktop_path = self.launcher_builder.create_launcher_files(
                 game_data, trainer_path, scripts_dir, desktop_dir, icon_path,
                 prefix_path=self.current_game.prefix_path,
                 trainer_prefix_path=trainer_prefix
@@ -423,12 +499,12 @@ class MainWindow:
                     trainer_path,
                     Path(trainer_path).stem
                 )
-                self.log(f"✅ Lanzador creado: {script_path}")
+                self.log(f"✅ Trainer copiado al prefix: {trainer_windows_path}")
                 self.log(f"✅ Entrada .desktop: {desktop_path}")
                 messagebox.showinfo(
                     "Éxito",
                     f"Lanzador creado correctamente:\n\n"
-                    f"Script: {script_path}\n"
+                    f"Trainer en prefix: {trainer_windows_path}\n"
                     f"Desktop: {desktop_path}\n\n"
                     f"El trainer se copió al prefix del juego.\n"
                     f"Ahora puedes buscar 'Fling Trainer - {self.current_game.name}' en tu menú de aplicaciones."
@@ -544,7 +620,7 @@ class MainWindow:
         return None
 
     def _launch_trainer(self):
-        """Lanza el trainer usando el script generado con setsid/nohup para desacoplar correctamente."""
+        """Lanza el trainer usando ProtonLauncher (paridad con protontricks)."""
         if not self.current_game:
             messagebox.showwarning("Sin juego", "Selecciona un juego primero")
             return
@@ -553,58 +629,57 @@ class MainWindow:
             messagebox.showwarning("Sin trainer", "Selecciona el archivo .exe del trainer")
             return
 
-        # Resolver ruta completa del trainer
         trainer_path = self._resolve_trainer_path(self.current_trainer_path)
         if not trainer_path:
-            messagebox.showerror("Error", 
+            messagebox.showerror("Error",
                 f"No se encuentra el trainer: {self.current_trainer_path}")
             return
 
-        # Buscar script generado
         safe_id = self.current_game.id.replace('/', '_').replace(' ', '_')
-        script_path = Path.home() / ".local" / "bin" / f"fling-{safe_id}.sh"
-        
-        if not script_path.exists():
-            self.log(f"⚠ Script no encontrado: {script_path}. Creando lanzador primero...", "warning")
+        desktop_path = Path.home() / ".local" / "share" / "applications" / f"fling-{safe_id}.desktop"
+
+        if not desktop_path.exists():
+            self.log(f"⚠ Lanzador no encontrado. Creando primero...", "warning")
             self._create_launcher()
-            if not script_path.exists():
+            if not desktop_path.exists():
                 messagebox.showerror("Error", "No se pudo crear el lanzador")
                 return
 
-        self.log(f"🚀 Lanzando trainer para {self.current_game.name}...")
-        self.log(f"   Usando script: {script_path}")
+        self.log(f"🚀 Lanzando trainer para {self.current_game.name}...", "info")
 
         def worker():
             try:
-                # Usar setsid + nohup para desacoplar correctamente el proceso
-                # Esto evita problemas con PTY que interfieren con Wine/Proton
-                cmd = ['setsid', 'nohup', str(script_path)]
-                
-                # Lanzar completamente desacoplado
-                proc = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
-                
-                self.root.after(0, lambda: self.log(f"✅ Trainer lanzado (PID: {proc.pid})", "success"))
-                # Verificar que sigue corriendo después de 2 seg
-                def check_proc():
-                    import time
-                    time.sleep(2)
-                    if proc.poll() is None:
-                        self.root.after(0, lambda: self.log("✅ Trainer ejecutándose correctamente", "success"))
-                    else:
-                        self.root.after(0, lambda: self.log(f"⚠ Trainer terminó con código {proc.returncode()}", "warning"))
-                
-                threading.Thread(target=check_proc, daemon=True).start()
-                
+                launcher = ProtonLauncher(log_callback=lambda msg, level: self.root.after(0, lambda: self.log(msg, level)))
+                trainer_windows_path = self._get_trainer_windows_path(trainer_path)
+                if not trainer_windows_path:
+                    self.root.after(0, lambda: self.log(f"❌ No se pudo resolver ruta Windows del trainer", "error"))
+                    return
+
+                success, msg = launcher.launch_trainer(self.current_game, trainer_windows_path)
+                if not success:
+                    self.root.after(0, lambda: self.log(f"❌ Error: {msg}", "error"))
+                launcher.cleanup()
             except Exception as e:
                 self.root.after(0, lambda: self.log(f"❌ Error lanzando trainer: {e}", "error"))
+                import traceback
+                traceback.print_exc()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _get_trainer_windows_path(self, trainer_path: str) -> str:
+        """Obtiene la ruta Windows del trainer copiado en el prefix."""
+        prefix_path = self.current_game.prefix_path
+        if not prefix_path:
+            return f"Z:{trainer_path}"
+
+        trainer_name = Path(trainer_path).stem.replace(' ', '_').replace('(', '').replace(')', '')
+        windows_path = f"C:\\\\Trainers\\\\{trainer_name}.exe"
+
+        full_path = Path(prefix_path) / "drive_c" / "Trainers" / f"{trainer_name}.exe"
+        if not full_path.exists():
+            return f"Z:{trainer_path}"
+
+        return windows_path
 
     def _install_system_deps(self):
         """Instala solo dependencias de sistema 32-bit."""
@@ -630,7 +705,7 @@ class MainWindow:
                     self.root.after(0, lambda: dialog.update_status(msg))
                     self.root.after(0, lambda: dialog.log(msg, "info"))
 
-                success, msg = prefix_mgr.install_system_deps_32bit(progress_cb)
+                success, msg = prefix_mgr.system_deps.install(progress_cb)
                 self.root.after(0, lambda: dialog.finish(success, msg))
             except Exception as e:
                 self.root.after(0, lambda: dialog.finish(False, f"Error: {e}"))
@@ -684,20 +759,39 @@ class MainWindow:
         notebook.add(options_frame, text="Opciones")
 
         install_sys_var = tk.BooleanVar(value=self.config.get("install_system_deps", True))
-        ttk.Checkbutton(options_frame, text="Instalar dependencias de sistema (32-bit) automáticamente",
+        tb.Checkbutton(options_frame, text="Instalar dependencias de sistema (32-bit) automáticamente",
                        variable=install_sys_var, bootstyle="round-toggle").pack(anchor=tk.W, pady=10)
 
         auto_deps_var = tk.BooleanVar(value=self.config.get("auto_install_deps", True))
-        ttk.Checkbutton(options_frame, text="Instalar dependencias Wine (.NET, vcrun, d3dx) automáticamente",
+        tb.Checkbutton(options_frame, text="Instalar dependencias Wine (.NET, vcrun, d3dx) automáticamente",
                        variable=auto_deps_var, bootstyle="round-toggle").pack(anchor=tk.W, pady=10)
+
+        # System theme auto-detection
+        use_system_theme_var = tk.BooleanVar(value=self.config.get("use_system_theme", True))
+        tb.Checkbutton(options_frame, text="Usar tema del sistema automáticamente (live reload)",
+                    variable=use_system_theme_var, bootstyle="round-toggle").pack(anchor=tk.W, pady=10)
 
         # Theme
         ttk.Label(options_frame, text="Tema:").pack(anchor=tk.W, pady=(15, 0))
         theme_var = tk.StringVar(value=self.config.get("theme", "darkly"))
         theme_combo = ttk.Combobox(options_frame, textvariable=theme_var,
-                                   values=["darkly", "cosmo", "flatly", "litera", "minty", "pulse", "sandstone", "yeti"],
-                                   state="readonly", width=20)
+                                    values=["darkly", "cosmo", "flatly", "litera", "minty", "pulse", "sandstone", "yeti"],
+                                    state="readonly", width=20)
         theme_combo.pack(anchor=tk.W, pady=5)
+
+        # Toggle theme combo state based on system theme checkbox
+        def on_system_theme_toggle():
+            use_system = use_system_theme_var.get()
+            self.config.set("use_system_theme", use_system)
+            theme_combo.config(state="disabled" if use_system else "readonly")
+            if use_system:
+                detected = self.theme_detector.get_mapped_theme()
+                theme_var.set(detected)
+                self._apply_theme_live(detected)
+
+        tb.Checkbutton(options_frame, text="Usar tema del sistema automáticamente (live reload)",
+                        variable=use_system_theme_var, bootstyle="round-toggle",
+                        command=on_system_theme_toggle).pack(anchor=tk.W, pady=10)
 
         # --- Botones ---
         btn_frame = ttk.Frame(dialog)
@@ -709,8 +803,9 @@ class MainWindow:
             self.config.set_steamgrid_api_key(api_var.get())
             self.config.set("install_system_deps", install_sys_var.get())
             self.config.set("auto_install_deps", auto_deps_var.get())
+            self.config.set("use_system_theme", use_system_theme_var.get())
             self.config.set("theme", theme_var.get())
-            messagebox.showinfo("Guardado", "Configuración guardada. Reinicia la app para aplicar tema.")
+            messagebox.showinfo("Guardado", "Configuración guardada.")
             dialog.destroy()
 
         tb.Button(btn_frame, text="Guardar", command=save_settings, bootstyle="success").pack(side=tk.RIGHT, padx=5)
@@ -740,7 +835,27 @@ class MainWindow:
             "Desarrollado para CachyOS / Arch Linux"
         )
 
+    def _apply_theme_live(self, theme: str):
+        """Aplica tema en vivo sin reiniciar la app."""
+        try:
+            style = tb.Style()
+            style.theme_use(theme)
+            self.log(f"🎨 Tema aplicado en vivo: {theme}", "info")
+        except Exception as e:
+            self.log(f"❌ Error aplicando tema en vivo: {e}", "error")
+
+    def _on_system_theme_changed(self, new_theme: str):
+        """Callback cuando cambia el tema del sistema (live reload)."""
+        use_system_theme = self.config.get("use_system_theme", True)
+        if use_system_theme:
+            self.config.set("theme", new_theme)
+            self._apply_theme_live(new_theme)
+
     def _on_close(self):
+        # Detener monitoreo de tema
+        if hasattr(self, 'theme_detector'):
+            self.theme_detector.stop_monitoring()
+        
         # Guardar geometría ventana
         geom = self.root.geometry()
         self.config.set("window_geometry", geom)

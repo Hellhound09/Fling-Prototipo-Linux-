@@ -69,7 +69,8 @@ class WineEnvManager:
             
             success, msg = self._run_winetricks_verb(verb)
             if not success:
-                return False, f"winetricks {verb} falló: {msg}"
+                # No fallar - el fallback ya se intentó internamente
+                logger.warning(f"{verb}: {msg}")
 
         # 2. DLL overrides
         if progress_callback:
@@ -80,10 +81,10 @@ class WineEnvManager:
             if not success:
                 logger.warning(f"DLL override {dll} falló: {msg}")
 
-        return True, "Entorno Wine preparado (win10, riched30, DLL overrides)"
+        return True, "Entorno Wine preparado (win10, riched30 con fallbacks)"
 
     def _run_winetricks_verb(self, verb: str) -> Tuple[bool, str]:
-        """Ejecuta un verb de winetricks."""
+        """Ejecuta un verb de winetricks. SIN timeout. Fallback a registry si falla."""
         if not self.winetricks_path:
             return False, "winetricks no disponible"
 
@@ -100,14 +101,48 @@ class WineEnvManager:
 
         cmd = [str(self.winetricks_path), '-q', verb]
         try:
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, errors='replace')
-            if result.returncode != 0:
-                return False, f"winetricks {verb} falló (código {result.returncode}): {result.stderr[-500:]}"
-            return True, f"{verb} OK"
-        except subprocess.TimeoutExpired:
-            return False, f"Timeout en winetricks {verb}"
+            # SIN timeout - esperar indefinidamente
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True, errors='replace')
+            if result.returncode == 0:
+                return True, f"{verb} OK"
+            
+            # Fallo winetricks -> intentar fallback registry
+            return self._fallback_registry(verb, f"winetricks código {result.returncode}")
+            
         except Exception as e:
-            return False, f"Error en winetricks {verb}: {e}"
+            # Excepción (archivo no encontrado, etc.) -> fallback
+            return self._fallback_registry(verb, str(e))
+
+    def _fallback_registry(self, verb: str, error: str = "") -> Tuple[bool, str]:
+        """Fallback via registry si winetricks falla."""
+        if not self.wine_bin:
+            return False, f"winetricks {verb} falló ({error}) y no hay wine para fallback"
+
+        if verb == "win10":
+            # Fallback: Windows 10 mode via registry
+            cmd = [
+                str(self.wine_bin), 'reg', 'add',
+                'HKCU\\Software\\Wine', '/v', 'Version', '/t', 'REG_SZ', '/d', 'win10', '/f'
+            ]
+            env = {
+                'WINEPREFIX': str(self.prefix_path),
+                'LC_ALL': 'C', 'LANG': 'C', 'LANGUAGE': 'C',
+            }
+            try:
+                result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=10, errors='replace')
+                if result.returncode == 0:
+                    return True, f"win10 configurado via registry fallback ({error})"
+            except Exception:
+                pass
+            return False, f"win10 falló: winetricks ({error}) y registry fallback falló"
+
+        elif verb == "riched30":
+            # Fallback riched30: setear DLL overrides para riched20/riched32
+            for dll in ['riched20', 'riched32']:
+                self._set_dll_override(dll, 'native,builtin')
+            return True, f"riched30: DLL overrides configurados como fallback ({error})"
+
+        return False, f"Verb {verb} falló ({error}) y no hay fallback definido"
 
     def _set_dll_override(self, dll: str, override: str) -> Tuple[bool, str]:
         """Configura DLL override en registro Wine."""
