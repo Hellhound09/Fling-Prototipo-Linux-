@@ -107,8 +107,8 @@ class SteamDetector:
                         if not install_path:
                             continue
 
-                        # Detectar prefijo Wine
-                        prefix_path = self._find_prefix(appid)
+                        # Detectar prefijo Wine (buscar en la misma biblioteca donde está instalado el juego)
+                        prefix_path = self._find_prefix(appid, lib_path)
                         proton_path = self._find_proton(appid, prefix_path)
 
                         # Detectar ejecutable principal
@@ -129,8 +129,15 @@ class SteamDetector:
                     continue
         return games
 
-    def _find_prefix(self, appid: str) -> Optional[str]:
-        """Busca el prefijo Wine del juego en compatdata."""
+    def _find_prefix(self, appid: str, library_path: Optional[Path] = None) -> Optional[str]:
+        """Busca el prefijo Wine del juego en compatdata.
+        Si se proporciona library_path, busca solo allí (donde está instalado el juego).
+        """
+        if library_path:
+            compat = library_path / "steamapps" / "compatdata" / appid / "pfx"
+            if compat.exists():
+                return str(compat)
+        # Fallback: buscar en todas las bibliotecas
         for lib in self.library_paths:
             compat = lib / "steamapps" / "compatdata" / appid / "pfx"
             if compat.exists():
