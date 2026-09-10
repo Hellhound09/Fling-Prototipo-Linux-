@@ -106,6 +106,7 @@ class LauncherBuilder:
             icon_path = self.extract_trainer_icon(trainer_path, trainer_name)
 
         template_data = {**game_data}
+        template_data['trainer_path'] = trainer_windows_path
         if trainer_prefix_path:
             template_data['prefix_path'] = trainer_prefix_path
             template_data['compatdata_path'] = str(Path(trainer_prefix_path).parent)

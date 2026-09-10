@@ -10,6 +10,25 @@ PREFIX="{{ prefix_path }}"
 PROTON="{{ proton_path }}"
 TRAINER="{{ trainer_path }}"
 
+# ========== Resolver wine binary del Proton ==========
+WINE_BIN="{{ proton_path }}"
+if [ ! -f "$WINE_BIN" ]; then
+    # Intentar encontrar wine en la estructura del Proton
+    PROTON_BASE="{{ proton_path }}"
+    for candidate in \
+        "$PROTON_BASE/../files/bin/wine" \
+        "$PROTON_BASE/../dist/bin/wine" \
+        "$PROTON_BASE/../bin/wine" \
+        "$PROTON_BASE/../../files/bin/wine" \
+        "$PROTON_BASE/../../dist/bin/wine" \
+        "/usr/bin/wine"; do
+        if [ -f "$candidate" ]; then
+            WINE_BIN="$candidate"
+            break
+        fi
+    done
+fi
+
 # ========== VARIABLES STEAM/PROTON BASE ==========
 export STEAM_COMPAT_APP_ID="{{ app_id }}"
 export STEAM_COMPAT_DATA_PATH="{{ compatdata_path }}"
@@ -85,4 +104,4 @@ export DWM_DISABLE=1
 export WINEDEBUG=-all
 
 # ========== EJECUTAR ==========
-exec "{{ proton_path }}" run "{{ trainer_path }}"
+exec "$WINE_BIN" "{{ trainer_path }}"
